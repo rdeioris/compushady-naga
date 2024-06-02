@@ -357,6 +357,8 @@ fn compushady_naga_module_to_msl(
                 .per_entry_point_map
                 .insert(String::from("main"), entry_point_resource);
 
+            options.lang_version = (1, 2);
+
             match naga::back::msl::write_string(
                 module,
                 &info,
