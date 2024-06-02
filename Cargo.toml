@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-naga = { version = "0.19.2", features = ["wgsl-in", "glsl-in", "spv-in", "hlsl-out", "spv-out", "msl-out"] }
+naga = { version = "0.20.0", features = ["wgsl-in", "glsl-in", "spv-in", "hlsl-out", "spv-out", "msl-out"] }
 
 [lib]
 crate-type = ["cdylib"]
