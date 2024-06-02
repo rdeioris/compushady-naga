@@ -243,7 +243,6 @@ fn compushady_naga_module_to_msl(
 
             let mut register_b: u32 = 0;
             let mut register_t: u32 = 0;
-            let mut register_u: u32 = 0;
             let mut register_s: u32 = 0;
 
             let mut ordered_globals = HashMap::<u32, Vec<&GlobalVariable>>::new();
@@ -289,20 +288,12 @@ fn compushady_naga_module_to_msl(
                             entry_point_resource.resources.insert(binding, bind_target);
                             register_b += 1
                         }
-                        naga::AddressSpace::Storage { access } => {
-                            if access.contains(naga::StorageAccess::STORE) {
-                                let binding = global_variable.binding.clone().unwrap();
-                                let mut bind_target = naga::back::msl::BindTarget::default();
-                                bind_target.buffer = Some(register_u as u8);
-                                entry_point_resource.resources.insert(binding, bind_target);
-                                register_u += 1
-                            } else {
-                                let binding = global_variable.binding.clone().unwrap();
-                                let mut bind_target = naga::back::msl::BindTarget::default();
-                                bind_target.buffer = Some(register_t as u8);
-                                entry_point_resource.resources.insert(binding, bind_target);
-                                register_t += 1
-                            }
+                        naga::AddressSpace::Storage { access: _ } => {
+                            let binding = global_variable.binding.clone().unwrap();
+                            let mut bind_target = naga::back::msl::BindTarget::default();
+                            bind_target.buffer = Some(register_b as u8);
+                            entry_point_resource.resources.insert(binding, bind_target);
+                            register_b += 1
                         }
                         naga::AddressSpace::Handle => {
                             let handle_ty = match *inner {
@@ -321,16 +312,6 @@ fn compushady_naga_module_to_msl(
                                         ));
                                     entry_point_resource.resources.insert(binding, bind_target);
                                     register_s += 1
-                                }
-                                naga::TypeInner::Image {
-                                    class: naga::ImageClass::Storage { .. },
-                                    ..
-                                } => {
-                                    let binding = global_variable.binding.clone().unwrap();
-                                    let mut bind_target = naga::back::msl::BindTarget::default();
-                                    bind_target.texture = Some(register_u as u8);
-                                    entry_point_resource.resources.insert(binding, bind_target);
-                                    register_u += 1
                                 }
                                 _ => {
                                     let binding = global_variable.binding.clone().unwrap();
