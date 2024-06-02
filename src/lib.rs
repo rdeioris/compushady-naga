@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ptr::null};
+use std::{collections::HashMap, mem, ptr::null};
 
 use naga::GlobalVariable;
 
@@ -237,8 +237,110 @@ fn compushady_naga_module_to_spv(
             }
         }
         Ok(info) => {
+            let mut register_b: u32 = 0;
+            let mut register_t: u32 = 1024;
+            let mut register_u: u32 = 2048;
+            let mut register_s: u32 = 3072;
+
+            let mut module2 = module.clone();
+
+            let mut ordered_globals = HashMap::<u32, Vec<&mut GlobalVariable>>::new();
+            // retrieve resources
+            for global_variable in module2.global_variables.iter_mut() {
+                match &global_variable.1.binding {
+                    None => {}
+                    Some(binding) => {
+                        if !ordered_globals.contains_key(&binding.group) {
+                            ordered_globals.insert(binding.group, Vec::new());
+                        }
+                        ordered_globals
+                            .get_mut(&binding.group)
+                            .unwrap()
+                            .push(global_variable.1);
+                    }
+                }
+            }
+
+            let mut group_keys: Vec<u32> = Vec::new();
+            for group_key in ordered_globals.keys() {
+                group_keys.push(*group_key)
+            }
+            group_keys.sort();
+
+            for group_key in group_keys {
+                let mut space_ordered_globals = HashMap::<u32, &mut GlobalVariable>::new();
+                for global_variable in ordered_globals.get_mut(&group_key).unwrap() {
+                    let key = global_variable.binding.as_ref().unwrap();
+                    space_ordered_globals.insert(key.binding, global_variable);
+                }
+
+                let mut keys: Vec<u32> = Vec::new();
+                for key in space_ordered_globals.keys() {
+                    keys.push(*key);
+                }
+                keys.sort();
+
+                for key in keys {
+                    let global_variable = space_ordered_globals.get_mut(&key).unwrap();
+
+                    let inner = &module2.types[global_variable.ty].inner;
+
+                    match &global_variable.space {
+                        naga::AddressSpace::Uniform => {
+                            global_variable.binding.as_mut().unwrap().group = 0;
+                            global_variable.binding.as_mut().unwrap().binding = register_b;
+                            register_b += 1
+                        }
+                        naga::AddressSpace::Storage { access } => {
+                            if access.contains(naga::StorageAccess::STORE) {
+                                global_variable.binding.as_mut().unwrap().group = 0;
+                                global_variable.binding.as_mut().unwrap().binding = register_u;
+                                register_u += 1
+                            } else {
+                                global_variable.binding.as_mut().unwrap().group = 0;
+                                global_variable.binding.as_mut().unwrap().binding = register_t;
+                                register_t += 1
+                            }
+                        }
+                        naga::AddressSpace::Handle => {
+                            let handle_ty = match *inner {
+                                naga::TypeInner::BindingArray { ref base, .. } => {
+                                    &module.types[*base].inner
+                                }
+                                _ => inner,
+                            };
+                            match *handle_ty {
+                                naga::TypeInner::Sampler { .. } => {
+                                    global_variable.binding.as_mut().unwrap().group = 0;
+                                    global_variable.binding.as_mut().unwrap().binding = register_s;
+                                    register_s += 1
+                                }
+                                naga::TypeInner::Image {
+                                    class: naga::ImageClass::Storage { .. },
+                                    ..
+                                } => {
+                                    global_variable.binding.as_mut().unwrap().group = 0;
+                                    global_variable.binding.as_mut().unwrap().binding = register_u;
+                                    register_u += 1
+                                }
+                                _ => {
+                                    global_variable.binding.as_mut().unwrap().group = 0;
+                                    global_variable.binding.as_mut().unwrap().binding = register_t;
+                                    register_t += 1
+                                }
+                            }
+                        }
+                        naga::AddressSpace::PushConstant => {
+                            global_variable.binding.as_mut().unwrap().group = 0;
+                            global_variable.binding.as_mut().unwrap().binding = register_b;
+                            register_b += 1
+                        }
+                        _ => {}
+                    }
+                }
+            }
             match naga::back::spv::write_vec(
-                module,
+                &module2,
                 &info,
                 &naga::back::spv::Options::default(),
                 Some(&naga::back::spv::PipelineOptions {
@@ -257,7 +359,7 @@ fn compushady_naga_module_to_spv(
                     let slice = spv_vec.into_boxed_slice();
 
                     unsafe {
-                        *spv_len = slice.len();
+                        *spv_len = slice.len() * mem::size_of::<u32>();
                     }
 
                     return Box::into_raw(slice) as *const u8;
