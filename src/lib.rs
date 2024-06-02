@@ -216,6 +216,176 @@ fn compushady_naga_module_to_hlsl(
     return null();
 }
 
+fn compushady_naga_module_to_msl(
+    module: &naga::Module,
+    source: &str,
+    hlsl_len: *mut usize,
+    error_ptr: *mut *const u8,
+    error_len: *mut usize,
+) -> *const u8 {
+    match naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(module)
+    {
+        Err(e) => {
+            let error_slice = e.emit_to_string(source).into_bytes().into_boxed_slice();
+            unsafe {
+                *error_len = error_slice.len();
+                *error_ptr = Box::into_raw(error_slice) as *const u8;
+            }
+        }
+        Ok(info) => {
+            let mut options = naga::back::msl::Options::default();
+
+            let mut entry_point_resource = naga::back::msl::EntryPointResources::default();
+
+            let mut register_b: u32 = 0;
+            let mut register_t: u32 = 0;
+            let mut register_u: u32 = 0;
+            let mut register_s: u32 = 0;
+
+            let mut ordered_globals = HashMap::<u32, Vec<&GlobalVariable>>::new();
+            // retrieve resources
+            for global_variable in module.global_variables.iter() {
+                match &global_variable.1.binding {
+                    None => {}
+                    Some(binding) => {
+                        if !ordered_globals.contains_key(&binding.group) {
+                            ordered_globals.insert(binding.group, Vec::new());
+                        }
+                        ordered_globals
+                            .get_mut(&binding.group)
+                            .unwrap()
+                            .push(global_variable.1);
+                    }
+                }
+            }
+
+            let mut group_keys: Vec<&u32> = ordered_globals.keys().collect();
+            group_keys.sort();
+
+            for group_key in group_keys {
+                let mut space_ordered_globals = HashMap::<u32, &GlobalVariable>::new();
+                for &global_variable in ordered_globals.get(group_key).unwrap() {
+                    let key = global_variable.binding.as_ref().unwrap();
+                    space_ordered_globals.insert(key.binding, global_variable);
+                }
+
+                let mut keys: Vec<&u32> = space_ordered_globals.keys().collect();
+                keys.sort();
+
+                for key in keys {
+                    let global_variable = space_ordered_globals[key];
+
+                    let inner = &module.types[global_variable.ty].inner;
+
+                    match &global_variable.space {
+                        naga::AddressSpace::Uniform => {
+                            let binding = global_variable.binding.clone().unwrap();
+                            let mut bind_target = naga::back::msl::BindTarget::default();
+                            bind_target.buffer = Some(register_b as u8);
+                            entry_point_resource.resources.insert(binding, bind_target);
+                            register_b += 1
+                        }
+                        naga::AddressSpace::Storage { access } => {
+                            if access.contains(naga::StorageAccess::STORE) {
+                                let binding = global_variable.binding.clone().unwrap();
+                                let mut bind_target = naga::back::msl::BindTarget::default();
+                                bind_target.buffer = Some(register_u as u8);
+                                entry_point_resource.resources.insert(binding, bind_target);
+                                register_u += 1
+                            } else {
+                                let binding = global_variable.binding.clone().unwrap();
+                                let mut bind_target = naga::back::msl::BindTarget::default();
+                                bind_target.buffer = Some(register_t as u8);
+                                entry_point_resource.resources.insert(binding, bind_target);
+                                register_t += 1
+                            }
+                        }
+                        naga::AddressSpace::Handle => {
+                            let handle_ty = match *inner {
+                                naga::TypeInner::BindingArray { ref base, .. } => {
+                                    &module.types[*base].inner
+                                }
+                                _ => inner,
+                            };
+                            match *handle_ty {
+                                naga::TypeInner::Sampler { .. } => {
+                                    let binding = global_variable.binding.clone().unwrap();
+                                    let mut bind_target = naga::back::msl::BindTarget::default();
+                                    bind_target.sampler =
+                                        Some(naga::back::msl::BindSamplerTarget::Resource(
+                                            register_s as u8,
+                                        ));
+                                    entry_point_resource.resources.insert(binding, bind_target);
+                                    register_s += 1
+                                }
+                                naga::TypeInner::Image {
+                                    class: naga::ImageClass::Storage { .. },
+                                    ..
+                                } => {
+                                    let binding = global_variable.binding.clone().unwrap();
+                                    let mut bind_target = naga::back::msl::BindTarget::default();
+                                    bind_target.texture = Some(register_u as u8);
+                                    entry_point_resource.resources.insert(binding, bind_target);
+                                    register_u += 1
+                                }
+                                _ => {
+                                    let binding = global_variable.binding.clone().unwrap();
+                                    let mut bind_target = naga::back::msl::BindTarget::default();
+                                    bind_target.texture = Some(register_t as u8);
+                                    entry_point_resource.resources.insert(binding, bind_target);
+                                    register_t += 1
+                                }
+                            }
+                        }
+                        naga::AddressSpace::PushConstant => {
+                            let binding = global_variable.binding.clone().unwrap();
+                            let mut bind_target = naga::back::msl::BindTarget::default();
+                            bind_target.buffer = Some(register_b as u8);
+                            entry_point_resource.resources.insert(binding, bind_target);
+                            register_b += 1
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            options
+                .per_entry_point_map
+                .insert(String::from("main"), entry_point_resource);
+
+            match naga::back::msl::write_string(
+                module,
+                &info,
+                &options,
+                &naga::back::msl::PipelineOptions::default(),
+            ) {
+                Err(e) => {
+                    let error_slice = e.to_string().into_bytes().into_boxed_slice();
+                    unsafe {
+                        *error_len = error_slice.len();
+                        *error_ptr = Box::into_raw(error_slice) as *const u8;
+                    }
+                }
+                Ok(buffer) => {
+                    let slice = buffer.0.into_bytes().into_boxed_slice();
+
+                    unsafe {
+                        *hlsl_len = slice.len();
+                    }
+
+                    return Box::into_raw(slice) as *const u8;
+                }
+            }
+        }
+    }
+
+    return null();
+}
+
 fn compushady_naga_module_to_spv(
     module: &naga::Module,
     source: &str,
@@ -481,6 +651,31 @@ pub extern "C" fn compushady_naga_wgsl_to_spv(
         }
         Ok(module) => {
             return compushady_naga_module_to_spv(&module, &source, spv_len, error_ptr, error_len);
+        }
+    }
+
+    return null();
+}
+
+#[no_mangle]
+pub extern "C" fn compushady_naga_wgsl_to_msl(
+    source_ptr: *const u8,
+    source_len: usize,
+    msl_len: *mut usize,
+    error_ptr: *mut *const u8,
+    error_len: *mut usize,
+) -> *const u8 {
+    let source = compushady_naga_get_source(source_ptr, source_len, msl_len, error_ptr, error_len);
+    match naga::front::wgsl::parse_str(&source) {
+        Err(e) => {
+            let error_slice = e.emit_to_string(&source).into_bytes().into_boxed_slice();
+            unsafe {
+                *error_len = error_slice.len();
+                *error_ptr = Box::into_raw(error_slice) as *const u8;
+            }
+        }
+        Ok(module) => {
+            return compushady_naga_module_to_msl(&module, &source, msl_len, error_ptr, error_len);
         }
     }
 
