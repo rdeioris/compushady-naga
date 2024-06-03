@@ -774,6 +774,55 @@ pub extern "C" fn compushady_naga_wgsl_to_msl(
 }
 
 #[no_mangle]
+pub extern "C" fn compushady_naga_glsl_to_msl(
+    source_ptr: *const u8,
+    source_len: usize,
+    entry_point_ptr: *const u8,
+    entry_point_len: usize,
+    flags: u32,
+    msl_len: *mut usize,
+    error_ptr: *mut *const u8,
+    error_len: *mut usize,
+    x: *mut u32,
+    y: *mut u32,
+    z: *mut u32,
+) -> *const u8 {
+    let source = compushady_naga_get_source(source_ptr, source_len, msl_len, error_ptr, error_len);
+    let entry_point = compushady_naga_get_utf8(entry_point_ptr, entry_point_len);
+    match naga::front::glsl::Frontend::default().parse(
+        &naga::front::glsl::Options {
+            stage: naga::ShaderStage::Compute,
+            defines: Default::default(),
+        },
+        &source,
+    ) {
+        Err(e) => {
+            let error_slice = e.emit_to_string(&source).into_bytes().into_boxed_slice();
+            unsafe {
+                *error_len = error_slice.len();
+                *error_ptr = Box::into_raw(error_slice) as *const u8;
+            }
+        }
+        Ok(module) => {
+            return compushady_naga_module_to_msl(
+                &module,
+                &source,
+                &entry_point,
+                flags,
+                msl_len,
+                error_ptr,
+                error_len,
+                x,
+                y,
+                z,
+            );
+        }
+    }
+
+    return null();
+}
+
+#[no_mangle]
 pub extern "C" fn compushady_naga_free(ptr: *mut u8, len: usize) {
     let slice = std::ptr::slice_from_raw_parts_mut(ptr, len);
     unsafe {
