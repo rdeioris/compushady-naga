@@ -205,6 +205,12 @@ fn compushady_naga_module_to_hlsl(
                         }
                     }
                 }
+
+                options.push_constants_target = Some(naga::back::hlsl::BindTarget {
+                    space: 0,
+                    register: register_b,
+                    binding_array_size: None,
+                });
             }
 
             let mut buffer = String::new();
@@ -1084,5 +1090,41 @@ mod tests {
         assert_eq!(x, 7);
         assert_eq!(y, 1);
         assert_eq!(z, 1);
+    }
+
+    #[test]
+    fn glsl_push_constant() {
+        let source = "layout( push_constant) uniform constants
+        {
+            uint data;
+        } PushConstants;
+        
+        layout(set = 0, binding = 0) buffer output0 {
+            uint data;
+        } Output0;
+        
+        layout (local_size_x = 1) in;
+        void main() {
+            Output0.data = PushConstants.data;
+        }";
+        let source_bytes = source.as_bytes();
+        let shader_model: &[u8] = "cs_6_0".as_bytes();
+        let mut hlsl_len: usize = 0;
+        let mut error_ptr: *const u8 = std::ptr::null_mut();
+        let mut error_len: usize = 0;
+
+        let _ = compushady_naga_glsl_to_hlsl(
+            source_bytes.as_ptr(),
+            source_bytes.len(),
+            shader_model.as_ptr(),
+            shader_model.len(),
+            1,
+            &mut hlsl_len,
+            &mut error_ptr,
+            &mut error_len,
+        );
+
+        assert!(error_len == 0);
+        assert!(hlsl_len > 0);
     }
 }
